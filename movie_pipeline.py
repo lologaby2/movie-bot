@@ -1,73 +1,78 @@
-# movie_pipeline.py
-
 import os
-import json
-import requests
 import uuid
+import yt_dlp
 from moviepy.editor import VideoFileClip
-from alignment_manager import extract_alignment_from_audio
+from faster_whisper import WhisperModel
+import openai
+import requests
 
+# تحميل الفيديو من تيك توك
+def download_tiktok_video(tiktok_url: str) -> str:
+    video_id = str(uuid.uuid4())
+    os.makedirs("downloads", exist_ok=True)
+    output_path = f"downloads/{video_id}.mp4"
 
-def download_tiktok_video(link: str, output_path='data/source.mp4'):
-    video_id = str(uuid.uuid4())[:8]
-    out_path = f"data/{video_id}.mp4"
-    
-    api_url = "https://tikwm.com/api/"
-    params = {"url": link}
-    try:
-        r = requests.get(api_url, params=params).json()
-        video_url = r['data']['play']
-        video = requests.get(video_url)
-        with open(out_path, 'wb') as f:
-            f.write(video.content)
-        return out_path
-    except:
-        raise Exception("❌ فشل تحميل الفيديو من تيك توك")
+    ydl_opts = {
+        'outtmpl': output_path,
+        'format': 'mp4',
+        'quiet': True,
+        'noplaylist': True
+    }
 
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([tiktok_url])
 
-def extract_english_audio(video_path, output_path=None):
-    if output_path is None:
-        output_path = video_path.replace('.mp4', '.mp3')
+    return video_id
+
+# استخراج الصوت بصيغة mp3
+def extract_audio(video_id: str) -> str:
+    video_path = f"downloads/{video_id}.mp4"
+    audio_path = f"downloads/{video_id}.mp3"
+
     clip = VideoFileClip(video_path)
-    clip.audio.write_audiofile(output_path)
-    return output_path
+    clip.audio.write_audiofile(audio_path, logger=None)
+    return audio_path
 
+# تفريغ النص الإنجليزي باستخدام Whisper
+def extract_english_text(audio_path: str) -> str:
+    model = WhisperModel("base", device="cpu", compute_type="int8")
+    segments, _ = model.transcribe(audio_path)
+    english_text = " ".join([seg.text.strip() for seg in segments])
+    return english_text
 
-def call_openai_api(text: str):
-    import openai
+# ترجمة النص إلى العربية باستخدام OpenAI
+def translate_to_arabic(english_text: str) -> str:
     openai.api_key = os.getenv("OPENAI_API_KEY")
-
-    prompt = f"""
-    هذا نص إنجليزي من ملخص فيلم، ترجمه إلى العربية مع إعادة صياغته بأسلوب راوي سينمائي مشوق، وابتعد عن الحرفية.
-
-    النص:
-    {text}
-    """
-
     response = openai.ChatCompletion.create(
         model="gpt-4o",
         messages=[
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": "ترجم النص التالي إلى العربية ترجمة بشرية احترافية:"},
+            {"role": "user", "content": english_text}
         ]
     )
-    return response['choices'][0]['message']['content']
+    return response.choices[0].message.content.strip()
 
+# إعادة صياغة النص بالعربية باستخدام ChatGPT
+def rewrite_arabic_text(arabic_text: str) -> str:
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "أعد صياغة هذا النص بأسلوب سردي مشوق وكأنك تحكيه لمتابعين على تيك توك:"},
+            {"role": "user", "content": arabic_text}
+        ]
+    )
+    return response.choices[0].message.content.strip()
 
-def process_tiktok_video(link: str):
-    video_path = download_tiktok_video(link)
-    audio_path = extract_english_audio(video_path)
-    alignment = extract_alignment_from_audio(audio_path)
-    full_text = "\n".join([seg['text'] for seg in alignment])
-    translated_text = call_openai_api(full_text)
-
-    translated_lines = translated_text.split(". ")
-    for i in range(min(len(alignment), len(translated_lines))):
-        alignment[i]['translated'] = translated_lines[i].strip()
-
-    with open("data/alignment.json", "w", encoding='utf-8') as f:
-        json.dump(alignment, f, ensure_ascii=False, indent=2)
+# دالة رئيسية للتجميع
+def process_tiktok_video(tiktok_url: str) -> dict:
+    video_id = download_tiktok_video(tiktok_url)
+    audio_path = extract_audio(video_id)
+    english_text = extract_english_text(audio_path)
+    arabic_text = translate_to_arabic(english_text)
+    final_text = rewrite_arabic_text(arabic_text)
 
     return {
-        "video_id": os.path.splitext(os.path.basename(video_path))[0],
-        "final_text": translated_text
+        "video_id": video_id,
+        "final_text": final_text
     }
