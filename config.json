@@ -1,0 +1,12 @@
+{
+  "daily_time": "07:00",
+  "min_duration": 50,
+  "max_duration": 90,
+  "min_views": 2000000,
+  "match_threshold": 0.10,
+  "audio_volume": 1.0,
+  "music_volume": 0.2,
+  "auto_classify": true,
+  "force_blur_subtitles": true,
+  "language": "ar"
+}
