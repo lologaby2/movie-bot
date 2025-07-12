@@ -1,0 +1,15 @@
+python-telegram-bot==20.3
+openai
+ffmpeg-python
+pytube
+easyocr
+pydub
+moviepy
+imagehash
+Pillow
+opencv-python
+numpy
+tqdm
+python-dotenv
+schedule
+requests
