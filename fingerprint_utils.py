@@ -7,7 +7,6 @@ FINGERPRINTS_DIR = "fingerprints"
 os.makedirs(FINGERPRINTS_DIR, exist_ok=True)
 
 def extract_fingerprint(video_path):
-    """يستخرج البصمة البصرية من الفيديو بناءً على متوسط ألوان الإطارات."""
     cap = cv2.VideoCapture(video_path)
     fingerprints = []
 
@@ -27,7 +26,6 @@ def save_fingerprint(video_id, fingerprint):
     np.save(path, fingerprint)
 
 def is_duplicate(new_fingerprint, threshold=0.1):
-    """يقارن البصمة الجديدة مع البصمات القديمة."""
     for filename in os.listdir(FINGERPRINTS_DIR):
         old_fp = np.load(os.path.join(FINGERPRINTS_DIR, filename))
         min_len = min(len(new_fingerprint), len(old_fp))
@@ -35,6 +33,6 @@ def is_duplicate(new_fingerprint, threshold=0.1):
             new_fingerprint[:min_len].reshape(1, -1),
             old_fp[:min_len].reshape(1, -1)
         )[0][0]
-        if sim > (1 - threshold):  # تشابه مرتفع = مكرر
+        if sim > (1 - threshold):
             return True
     return False
