@@ -1,110 +1,26 @@
-import os
-import json
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
-)
+import os import telebot from movie_pipeline import process_tiktok_video from video_generator import create_final_video
 
-# إعداد السجل
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+BOT_TOKEN = os.getenv("BOT_TOKEN") bot = telebot.TeleBot(BOT_TOKEN)
 
-# تحميل الإعدادات
-CONFIG_PATH = "config.json"
-CHANNELS_PATH = "channels.txt"
-MUSIC_FOLDER = "music"
-os.makedirs(MUSIC_FOLDER, exist_ok=True)
+@bot.message_handler(commands=['start']) def start_message(message): bot.send_message(message.chat.id, "👋 مرحبًا بك! أرسل رابط فيديو تيك توك لبدء المعالجة.")
 
-if os.path.exists(CONFIG_PATH):
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        config = json.load(f)
-else:
-    config = {
-        "daily_time": "07:00",
-        "min_duration": 50,
-        "max_duration": 90,
-        "min_views": 2000000,
-        "match_threshold": 0.10,
-        "audio_volume": 1.0,
-        "music_volume": 0.2,
-        "auto_classify": True,
-        "force_blur_subtitles": True,
-        "language": "ar"
-    }
+@bot.message_handler(func=lambda msg: msg.text and 'tiktok.com' in msg.text) def handle_tiktok_link(message): link = message.text bot.send_message(message.chat.id, "📅 جاري تحميل الفيديو وتحليله...") try: result = process_tiktok_video(link, message.chat.id) bot.send_message(message.chat.id, f"🌟 تم انشاء النص: {result['final_text']}\n\n🎤 حوله الى صوت mp3 وارسله.") os.makedirs("waiting_audio", exist_ok=True) with open(f"waiting_audio/{message.chat.id}.txt", 'w') as f: f.write(result['video_id']) except Exception as e: bot.send_message(message.chat.id, f"❌ حدث خطأ: {e}")
 
-bot_status = {"stopped": False}
+@bot.message_handler(content_types=['audio']) def handle_audio(message): user_id = message.chat.id try: with open(f"waiting_audio/{user_id}.txt") as f: video_id = f.read().strip() except FileNotFoundError: return bot.send_message(user_id, "❗ لم يتم العثور على سياق سابق. أرسل رابط تيك توك أولاً.")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("➕ أضف موسيقى", callback_data="add_music")],
-        [InlineKeyboardButton("📺 أضف قناة", callback_data="add_channel")],
-        [InlineKeyboardButton("🎬 أنشئ فيديو الآن", callback_data="make_video")],
-        [
-            InlineKeyboardButton("⏹️ إيقاف البوت", callback_data="stop_bot"),
-            InlineKeyboardButton("▶️ استئناف", callback_data="resume_bot")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("👋 مرحباً! هذا بوت ملخصات الأفلام. اختر خيارًا:", reply_markup=reply_markup)
+bot.send_message(user_id, "🎮 جاري إنتاج الفيديو النهائي بدقة 1080p...")
+file_info = bot.get_file(message.audio.file_id)
+downloaded_file = bot.download_file(file_info.file_path)
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+os.makedirs("temp", exist_ok=True)
+audio_path = f"temp/{video_id}.mp3"
+with open(audio_path, 'wb') as f:
+    f.write(downloaded_file)
 
-    if bot_status["stopped"] and query.data != "resume_bot":
-        await query.edit_message_text("🚫 البوت متوقف مؤقتًا. اضغط ▶️ لاستئناف.")
-        return
+output_path = create_final_video(video_id, audio_path)
 
-    if query.data == "add_music":
-        await query.edit_message_text("🎵 أرسل الآن ملف الموسيقى (mp3).")
-        context.user_data['awaiting_music'] = True
+with open(output_path, 'rb') as f:
+    bot.send_video(user_id, f, caption="🎉 هذا هو الفيديو النهائي!")
 
-    elif query.data == "add_channel":
-        await query.edit_message_text("📺 أرسل رابط قناة تيك توك.")
-        context.user_data['awaiting_channel'] = True
+bot.infinity_polling()
 
-    elif query.data == "make_video":
-        await query.edit_message_text("⚙️ جاري معالجة الفيديو... (ميزة قيد التطوير)")
-        # لاحقًا: تنفيذ الإنشاء التلقائي هنا
-
-    elif query.data == "stop_bot":
-        bot_status["stopped"] = True
-        await query.edit_message_text("✅ تم إيقاف البوت مؤقتًا.")
-
-    elif query.data == "resume_bot":
-        bot_status["stopped"] = False
-        await query.edit_message_text("✅ تم استئناف البوت.")
-
-async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('awaiting_music'):
-        file = await update.message.audio.get_file()
-        file_path = os.path.join(MUSIC_FOLDER, f"{file.file_id}.mp3")
-        await file.download_to_drive(file_path)
-        await update.message.reply_text("✅ تم حفظ الموسيقى.")
-        context.user_data['awaiting_music'] = False
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('awaiting_channel'):
-        link = update.message.text.strip()
-        if link.startswith("http"):
-            with open(CHANNELS_PATH, 'a', encoding='utf-8') as f:
-                f.write(link + "\n")
-            await update.message.reply_text("📺 تم حفظ القناة.")
-        else:
-            await update.message.reply_text("❌ الرابط غير صالح.")
-        context.user_data['awaiting_channel'] = False
-
-if __name__ == '__main__':
-    TOKEN = os.getenv("BOT_TOKEN")
-    if not TOKEN:
-        print("❌ يجب تحديد متغير BOT_TOKEN.")
-        exit(1)
-
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.AUDIO, handle_audio))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
-    app.run_polling()
