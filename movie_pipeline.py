@@ -1,35 +1,32 @@
-import os import json import uuid import yt_dlp from moviepy.editor import VideoFileClip from faster_whisper import WhisperModel import openai
+import os import json import yt_dlp import tempfile import shutil from faster_whisper import WhisperModel from openai import OpenAI from utils import translate_and_rewrite from fingerprint_utils import compute_video_hash, is_duplicate
 
-تحميل الإعدادات
+model = WhisperModel("medium", compute_type="float16") openai_api_key = os.getenv("OPENAI_API_KEY")
 
-CONFIG_PATH = "config.json" with open(CONFIG_PATH, 'r', encoding='utf-8') as f: config = json.load(f)
+HISTORY_PATH = "history.json"
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+if not os.path.exists(HISTORY_PATH): with open(HISTORY_PATH, 'w') as f: json.dump([], f)
 
-def download_video(url): video_id = str(uuid.uuid4()) output_path = f"downloads/{video_id}.mp4" os.makedirs("downloads", exist_ok=True)
+def download_video(url): ydl_opts = { 'format': 'mp4', 'outtmpl': 'downloads/%(id)s.%(ext)s', 'quiet': True, 'no_warnings': True, } with yt_dlp.YoutubeDL(ydl_opts) as ydl: info = ydl.extract_info(url, download=True) video_path = ydl.prepare_filename(info) return video_path, info.get("id", "unknown")
 
-ydl_opts = {
-    'outtmpl': output_path,
-    'format': 'mp4/bestvideo[ext=mp4]+bestaudio/best',
-    'quiet': True,
-}
-with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-    ydl.download([url])
-return video_id, output_path
+def transcribe_audio(video_path): segments, _ = model.transcribe(video_path, vad_filter=True) english_text = "\n".join([seg.text for seg in segments]) return english_text
 
-def extract_audio(video_path): audio_path = video_path.replace(".mp4", ".mp3") clip = VideoFileClip(video_path) clip.audio.write_audiofile(audio_path, logger=None) return audio_path
+def check_duplicate(video_path): new_hash = compute_video_hash(video_path) with open(HISTORY_PATH, 'r') as f: history = json.load(f)
 
-def transcribe_audio(audio_path): model = WhisperModel("base", device="cpu", compute_type="int8") segments, _ = model.transcribe(audio_path, beam_size=5) full_text = " ".join([seg.text for seg in segments]) return full_text
+for item in history:
+    if is_duplicate(new_hash, item["hash"], threshold=0.10):
+        return True
+return False
 
-def translate_and_rewrite(text): prompt = f"ترجم النص التالي إلى العربية وأعد صياغته ليكون مشوقًا لفيديو يوتيوب:
+def save_to_history(video_id, video_path): with open(HISTORY_PATH, 'r') as f: history = json.load(f) video_hash = compute_video_hash(video_path) history.append({"id": video_id, "hash": video_hash}) with open(HISTORY_PATH, 'w') as f: json.dump(history, f, indent=2)
 
-{text}" response = openai.ChatCompletion.create( model="gpt-4", messages=[{"role": "user", "content": prompt}], temperature=0.7 ) return response.choices[0].message.content.strip()
+def process_tiktok_video(url): video_path, video_id = download_video(url)
 
-def process_tiktok_video(url): video_id, video_path = download_video(url) audio_path = extract_audio(video_path) transcript = transcribe_audio(audio_path) final_text = translate_and_rewrite(transcript)
+if check_duplicate(video_path):
+    raise Exception("🚫 هذا الفيديو مشابه لفيديو سابق")
 
-return {
-    "video_id": video_id,
-    "video_path": video_path,
-    "final_text": final_text
-}
+english_text = transcribe_audio(video_path)
+final_text = translate_and_rewrite(english_text, openai_api_key)
+
+save_to_history(video_id, video_path)
+return {"final_text": final_text, "video_id": video_id}
 
